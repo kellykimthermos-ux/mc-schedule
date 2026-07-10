@@ -3,7 +3,7 @@
 마컴 선택적 근무시간제 스케줄 관리 앱 (최종)
 
 확정 스펙
-- 로그인: 이름 선택만 (PIN 없음)
+- 로그인: 팀원은 이름 선택만 / 팀장(승인 권한 보유)은 이름 선택 + PIN 입력
 - 팀원 주간 등록: 제출 → 팀장 승인 후 확정 (주 단위 일괄 승인 카드 1장)
 - 주간 반려: 해당 주 등록 취소(삭제) → 팀원 수정 후 재제출
 - 지난주 복사: 같은 요일 기준 유형/시간/비고 복사 (이미 등록된 날짜 제외)
@@ -27,7 +27,7 @@ from google.oauth2.service_account import Credentials
 KST = ZoneInfo("Asia/Seoul")
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 WORK_TYPES = ["근무", "연차", "오전반차", "오후반차", "기타"]
-IN_TIME_OPTIONS = [time(8, 0), time(8, 30), time(9, 30), time(10, 0)]
+IN_TIME_OPTIONS = [time(8, 0), time(8, 30), time(9, 0), time(9, 30), time(10, 0)]
 OUT_TIME_OPTIONS = [
     time(16, 0), time(16, 30), time(17, 0), time(17, 30),
     time(18, 30), time(19, 30), time(20, 0), time(20, 30),
@@ -247,7 +247,7 @@ def week_dates(monday: date) -> list:
 
 
 # ─────────────────────────────────────────────
-# 로그인 (이름 선택만)
+# 로그인 (팀원: 이름 선택만 / 팀장: 이름 + PIN)
 # ─────────────────────────────────────────────
 users_cfg = st.secrets["users"]
 LEADER = next(n for n, u in users_cfg.items() if u["role"] == "leader")
@@ -259,9 +259,23 @@ with st.sidebar:
     st.title("🗓️ 마컴 근무 스케줄")
     if st.session_state.user is None:
         sel = st.selectbox("이름을 선택하세요", list(users_cfg.keys()))
-        if st.button("로그인", use_container_width=True, type="primary"):
-            st.session_state.user = sel
-            st.rerun()
+        sel_is_leader = users_cfg[sel]["role"] == "leader"
+        if sel_is_leader:
+            pin = st.text_input("PIN", type="password", key="login_pin")
+            login_clicked = st.button("로그인", use_container_width=True, type="primary")
+            if login_clicked:
+                correct_pin = str(users_cfg[sel].get("pin", ""))
+                if not correct_pin:
+                    st.error("팀장 계정의 PIN이 설정되어 있지 않습니다. secrets 설정을 확인해주세요.")
+                elif pin == correct_pin:
+                    st.session_state.user = sel
+                    st.rerun()
+                else:
+                    st.error("PIN이 올바르지 않습니다.")
+        else:
+            if st.button("로그인", use_container_width=True, type="primary"):
+                st.session_state.user = sel
+                st.rerun()
         st.stop()
     else:
         user = st.session_state.user
