@@ -573,10 +573,46 @@ def tab_my_requests(container):
         if mine.empty:
             st.info("요청 내역이 없습니다.")
             return
+
+        pending_mine = mine[mine["상태"] == "대기"]
+        if not pending_mine.empty:
+            st.markdown("**승인 대기 중 — 철회 가능**")
+            sch = load_df("schedule")
+            for _, r in pending_mine.iterrows():
+                with st.container(border=True):
+                    if r["구분"] == "주간신규":
+                        st.markdown(f"🗂️ **주간 신규** · {r['날짜']}  \n{r['사유']}  \n요청: {r['요청일시']}")
+                    else:
+                        st.markdown(
+                            f"🔁 **변경** · {r['날짜']} "
+                            f"({WEEKDAY_KR[date.fromisoformat(r['날짜']).weekday()]})  \n"
+                            f"변경 전 `{label_of(r['기존유형'], r['기존출근'], r['기존퇴근'])}` → "
+                            f"변경 후 `{label_of(r['신규유형'], r['신규출근'], r['신규퇴근'])}`  \n"
+                            f"사유: {r['사유']} · 요청: {r['요청일시']}"
+                        )
+                    if st.button("↩️ 철회", key=f"withdraw_{r['요청ID']}"):
+                        if r["구분"] == "주간신규":
+                            start, _, end = r["날짜"].partition("~")
+                            week_rows = sch[(sch["이름"] == user) &
+                                            (sch["날짜"] >= start) & (sch["날짜"] <= end) &
+                                            (sch["상태"] == "승인대기")]
+                            delete_schedule_rows(list(week_rows.index))
+                        else:
+                            idx = find_schedule_row(sch, user, r["날짜"])
+                            if idx is not None:
+                                update_schedule_cells(idx, {"상태": "확정"})  # 기존 값 유지
+                        update_request_cells(req_all, r["요청ID"], {
+                            "상태": "철회", "처리일시": now_str(), "처리메모": "본인 철회",
+                        })
+                        clear_cache()
+                        st.success("철회되었습니다.")
+                        st.rerun()
+            st.divider()
+
         show = mine[["구분", "날짜", "기존출근", "기존퇴근", "신규유형", "신규출근", "신규퇴근",
                      "사유", "상태", "요청일시", "처리메모"]]
         st.dataframe(show, use_container_width=True, hide_index=True)
-        st.caption("주간신규 반려 시 해당 주 등록은 취소되며, 수정 후 다시 제출하면 됩니다.")
+        st.caption("주간신규 반려/철회 시 해당 주 등록은 취소되며, 수정 후 다시 제출하면 됩니다.")
 
 
 # ─────────────────────────────────────────────
