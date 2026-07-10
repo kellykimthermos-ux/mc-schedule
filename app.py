@@ -33,6 +33,11 @@ OUT_TIME_OPTIONS = [
     time(18, 30), time(19, 30), time(20, 0), time(20, 30),
     time(21, 0), time(21, 30), time(22, 0),
 ]
+# 드롭다운용: 맨 앞에 공란(None) 추가 — 오전/오후 반차처럼 출근 또는 퇴근 한쪽만 필요한 경우 선택
+IN_TIME_CHOICES = [None] + IN_TIME_OPTIONS
+OUT_TIME_CHOICES = [None] + OUT_TIME_OPTIONS
+
+
 def nearest_option(t: time, options: list) -> time:
     """저장된 값이 옵션 목록에 없을 경우(과거 09:00/18:00 데이터 등) 가장 가까운 옵션으로 보정"""
     if t in options:
@@ -44,6 +49,23 @@ def nearest_option(t: time, options: list) -> time:
 
 DEFAULT_IN = nearest_option(time(9, 0), IN_TIME_OPTIONS)
 DEFAULT_OUT = nearest_option(time(18, 0), OUT_TIME_OPTIONS)
+
+
+def resolve_choice(raw: str, options: list, fallback: time):
+    """저장된 문자열을 드롭다운 선택값으로 변환. 공란이면 None(공란) 유지, 파싱 실패 시 fallback."""
+    raw = str(raw).strip()
+    if not raw or raw.lower() == "nan":
+        return None
+    try:
+        h, m = raw.split(":")
+        return nearest_option(time(int(h), int(m)), options)
+    except Exception:
+        return fallback
+
+
+def time_fmt(t):
+    """selectbox 표시용: None → 공란 표시"""
+    return "—" if t is None else fmt_time(t)
 
 SCHEDULE_HEADERS = ["이름", "날짜", "유형", "출근", "퇴근", "비고", "상태"]
 REQUEST_HEADERS = [
@@ -190,6 +212,8 @@ def update_request_cells(df: pd.DataFrame, req_id: str, values: dict):
 
 
 def fmt_time(t) -> str:
+    if t is None:
+        return ""
     return t.strftime("%H:%M") if isinstance(t, time) else str(t)
 
 
@@ -337,8 +361,8 @@ def tab_register(container):
                     continue
                 p = prev.iloc[0]
                 st.session_state[f"wt_{ds}"] = p["유형"] if p["유형"] in WORK_TYPES else "근무"
-                st.session_state[f"in_{ds}"] = nearest_option(parse_hhmm(p["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
-                st.session_state[f"out_{ds}"] = nearest_option(parse_hhmm(p["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
+                st.session_state[f"in_{ds}"] = resolve_choice(p["출근"], IN_TIME_OPTIONS, DEFAULT_IN)
+                st.session_state[f"out_{ds}"] = resolve_choice(p["퇴근"], OUT_TIME_OPTIONS, DEFAULT_OUT)
                 st.session_state[f"memo_{ds}"] = p["비고"]
                 copied += 1
             if copied:
@@ -371,12 +395,12 @@ def tab_register(container):
                 st.markdown(f"**{day_label}**")
                 wt = st.selectbox("유형", WORK_TYPES, key=f"wt_{ds}", label_visibility="collapsed")
             t_in = c2.selectbox(
-                "출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(DEFAULT_IN),
-                key=f"in_{ds}", format_func=fmt_time, label_visibility="collapsed",
+                "출근", IN_TIME_CHOICES, index=IN_TIME_CHOICES.index(DEFAULT_IN),
+                key=f"in_{ds}", format_func=time_fmt, label_visibility="collapsed",
             )
             t_out = c3.selectbox(
-                "퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(DEFAULT_OUT),
-                key=f"out_{ds}", format_func=fmt_time, label_visibility="collapsed",
+                "퇴근", OUT_TIME_CHOICES, index=OUT_TIME_CHOICES.index(DEFAULT_OUT),
+                key=f"out_{ds}", format_func=time_fmt, label_visibility="collapsed",
             )
             memo = c4.text_input("비고", key=f"memo_{ds}", label_visibility="collapsed", placeholder="비고")
             entries[ds] = (wt, t_in, t_out, memo)
@@ -454,10 +478,10 @@ def tab_change_request(container):
         c1, c2, c3 = st.columns(3)
         cur_type_idx = WORK_TYPES.index(cur["유형"]) if cur["유형"] in WORK_TYPES else 0
         new_type = c1.selectbox("변경 유형", WORK_TYPES, index=cur_type_idx)
-        cur_in = nearest_option(parse_hhmm(cur["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
-        cur_out = nearest_option(parse_hhmm(cur["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
-        new_in = c2.selectbox("새 출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(cur_in), format_func=fmt_time)
-        new_out = c3.selectbox("새 퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(cur_out), format_func=fmt_time)
+        cur_in = resolve_choice(cur["출근"], IN_TIME_OPTIONS, DEFAULT_IN)
+        cur_out = resolve_choice(cur["퇴근"], OUT_TIME_OPTIONS, DEFAULT_OUT)
+        new_in = c2.selectbox("새 출근", IN_TIME_CHOICES, index=IN_TIME_CHOICES.index(cur_in), format_func=time_fmt)
+        new_out = c3.selectbox("새 퇴근", OUT_TIME_CHOICES, index=OUT_TIME_CHOICES.index(cur_out), format_func=time_fmt)
         reason = st.text_input("변경 사유 (필수)", placeholder="예: 오후 병원 방문으로 조기 출근")
 
         if st.button("변경 요청 제출", type="primary"):
@@ -617,10 +641,10 @@ def tab_leader_edit(container):
         c1, c2, c3 = st.columns(3)
         cur_type_idx = WORK_TYPES.index(cur["유형"]) if cur["유형"] in WORK_TYPES else 0
         new_type = c1.selectbox("변경 유형", WORK_TYPES, index=cur_type_idx)
-        cur_in = nearest_option(parse_hhmm(cur["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
-        cur_out = nearest_option(parse_hhmm(cur["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
-        new_in = c2.selectbox("새 출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(cur_in), format_func=fmt_time)
-        new_out = c3.selectbox("새 퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(cur_out), format_func=fmt_time)
+        cur_in = resolve_choice(cur["출근"], IN_TIME_OPTIONS, DEFAULT_IN)
+        cur_out = resolve_choice(cur["퇴근"], OUT_TIME_OPTIONS, DEFAULT_OUT)
+        new_in = c2.selectbox("새 출근", IN_TIME_CHOICES, index=IN_TIME_CHOICES.index(cur_in), format_func=time_fmt)
+        new_out = c3.selectbox("새 퇴근", OUT_TIME_CHOICES, index=OUT_TIME_CHOICES.index(cur_out), format_func=time_fmt)
         memo = st.text_input("비고", value=cur["비고"])
 
         if st.button("즉시 반영", type="primary"):
