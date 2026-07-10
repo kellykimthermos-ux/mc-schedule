@@ -349,87 +349,112 @@ def tab_register(container):
         my_rows = sch[sch["이름"] == user]
         existing = {r["날짜"]: r for _, r in my_rows.iterrows()}
 
+        # 이미 등록/제출된 날짜는 표 위에 안내만 표시 (한 줄씩, 컬럼 나열 없음 → 레이아웃 깨짐 방지)
+        for d in days:
+            ds = d.isoformat()
+            if ds not in existing:
+                continue
+            day_label = f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})"
+            r = existing[ds]
+            if r["상태"] == "승인대기":
+                st.warning(f"{day_label}: {schedule_label(r)} — 승인 대기 중")
+            else:
+                st.info(f"{day_label}: {schedule_label(r)} 확정 → 수정은 변경 요청 탭에서")
+
+        open_days = [d for d in days if d.isoformat() not in existing]
+        if not open_days:
+            st.caption("이 주는 모든 날짜가 이미 등록/제출되어 있습니다.")
+            return
+
+        IN_STR = ["—"] + [fmt_time(t) for t in IN_TIME_OPTIONS]
+        OUT_STR = ["—"] + [fmt_time(t) for t in OUT_TIME_OPTIONS]
+        base_key = f"regbase_{user}_{mon.isoformat()}"
+        ver_key = f"regver_{user}_{mon.isoformat()}"
+        st.session_state.setdefault(ver_key, 0)
+
+        def default_row(d):
+            return {
+                "날짜": f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})",
+                "유형": "근무",
+                "출근": fmt_time(DEFAULT_IN),
+                "퇴근": fmt_time(DEFAULT_OUT),
+                "비고": "",
+            }
+
+        if base_key not in st.session_state:
+            st.session_state[base_key] = pd.DataFrame([default_row(d) for d in open_days])
+
         # 지난주 복사
         if st.button("↩️ 지난주 스케줄 복사"):
+            new_rows = []
             copied = 0
-            for d in days:
-                ds = d.isoformat()
-                if ds in existing:
-                    continue
+            for d in open_days:
                 prev = my_rows[my_rows["날짜"] == (d - timedelta(days=7)).isoformat()]
                 if prev.empty:
+                    new_rows.append(default_row(d))
                     continue
                 p = prev.iloc[0]
-                st.session_state[f"wt_{ds}"] = p["유형"] if p["유형"] in WORK_TYPES else "근무"
-                st.session_state[f"in_{ds}"] = resolve_choice(p["출근"], IN_TIME_OPTIONS, DEFAULT_IN)
-                st.session_state[f"out_{ds}"] = resolve_choice(p["퇴근"], OUT_TIME_OPTIONS, DEFAULT_OUT)
-                st.session_state[f"memo_{ds}"] = p["비고"]
+                wt = p["유형"] if p["유형"] in WORK_TYPES else "근무"
+                t_in = resolve_choice(p["출근"], IN_TIME_OPTIONS, DEFAULT_IN)
+                t_out = resolve_choice(p["퇴근"], OUT_TIME_OPTIONS, DEFAULT_OUT)
+                new_rows.append({
+                    "날짜": f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})",
+                    "유형": wt, "출근": time_fmt(t_in), "퇴근": time_fmt(t_out),
+                    "비고": p["비고"],
+                })
                 copied += 1
+            st.session_state[base_key] = pd.DataFrame(new_rows)
+            st.session_state[ver_key] += 1  # 위젯을 새로 마운트해 복사 내용이 확실히 반영되도록 함
             if copied:
                 st.info(f"지난주 {copied}일 복사됨 — 연차·반차도 그대로 복사되니 제출 전 확인하세요.")
             else:
-                st.warning("복사할 지난주 스케줄이 없거나, 이 주는 이미 모두 등록되어 있습니다.")
+                st.warning("복사할 지난주 스케줄이 없어 기본값으로 채워졌습니다.")
+            st.rerun()
 
-        entries = {}
-        header_shown = False
-        for d in days:
-            ds = d.isoformat()
-            day_label = f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})"
-            c1, c2, c3, c4 = st.columns([1.2, 1.5, 1.5, 2])
-            if ds in existing:
-                r = existing[ds]
-                c1.markdown(f"**{day_label}**")
-                if r["상태"] == "승인대기":
-                    c2.warning(f"{schedule_label(r)} — 승인 대기 중")
-                else:
-                    c2.info(f"{schedule_label(r)} 확정 → 수정은 변경 요청")
-                continue
-            if not header_shown:
-                h1, h2, h3, h4 = st.columns([1.2, 1.5, 1.5, 2])
-                h1.caption("날짜 / 유형")
-                h2.caption("출근")
-                h3.caption("퇴근")
-                h4.caption("비고")
-                header_shown = True
-            with c1:
-                st.markdown(f"**{day_label}**")
-                wt = st.selectbox("유형", WORK_TYPES, key=f"wt_{ds}", label_visibility="collapsed")
-            t_in = c2.selectbox(
-                "출근", IN_TIME_CHOICES, index=IN_TIME_CHOICES.index(DEFAULT_IN),
-                key=f"in_{ds}", format_func=time_fmt, label_visibility="collapsed",
-            )
-            t_out = c3.selectbox(
-                "퇴근", OUT_TIME_CHOICES, index=OUT_TIME_CHOICES.index(DEFAULT_OUT),
-                key=f"out_{ds}", format_func=time_fmt, label_visibility="collapsed",
-            )
-            memo = c4.text_input("비고", key=f"memo_{ds}", label_visibility="collapsed", placeholder="비고")
-            entries[ds] = (wt, t_in, t_out, memo)
-
-        if not entries:
-            return
+        editor_key = f"editor_{user}_{mon.isoformat()}_{st.session_state[ver_key]}"
+        edited = st.data_editor(
+            st.session_state[base_key],
+            key=editor_key,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            column_order=["날짜", "유형", "출근", "퇴근", "비고"],
+            column_config={
+                "날짜": st.column_config.TextColumn("날짜", disabled=True, width="small"),
+                "유형": st.column_config.SelectboxColumn("유형", options=WORK_TYPES, required=True, width="small"),
+                "출근": st.column_config.SelectboxColumn("출근", options=IN_STR, required=True, width="small"),
+                "퇴근": st.column_config.SelectboxColumn("퇴근", options=OUT_STR, required=True, width="small"),
+                "비고": st.column_config.TextColumn("비고"),
+            },
+        )
 
         btn_label = "이 주 스케줄 등록 (즉시 확정)" if is_leader else "주간 스케줄 제출 (팀장 승인 후 확정)"
         if st.button(btn_label, type="primary"):
             status = "확정" if is_leader else "승인대기"
             rows, summary = [], []
-            for ds in sorted(entries.keys()):
-                wt, t_in, t_out, memo = entries[ds]
-                d = date.fromisoformat(ds)
+            for d, (_, row) in zip(open_days, edited.iterrows()):
+                ds = d.isoformat()
+                wt = row["유형"]
+                t_in_s = "" if row["출근"] == "—" else row["출근"]
+                t_out_s = "" if row["퇴근"] == "—" else row["퇴근"]
+                memo = row["비고"]
                 if wt == "연차":
                     rows.append([user, ds, wt, "", "", memo, status])
                     summary.append(f"{WEEKDAY_KR[d.weekday()]} 연차")
                 else:
-                    rows.append([user, ds, wt, fmt_time(t_in), fmt_time(t_out), memo, status])
+                    rows.append([user, ds, wt, t_in_s, t_out_s, memo, status])
                     tag = f"({wt})" if wt != "근무" else ""
-                    summary.append(f"{WEEKDAY_KR[d.weekday()]} {fmt_time(t_in)}–{fmt_time(t_out)}{tag}")
+                    summary.append(f"{WEEKDAY_KR[d.weekday()]} {t_in_s}–{t_out_s}{tag}")
             get_ws("schedule", SCHEDULE_HEADERS).append_rows(rows)
+            del st.session_state[base_key]
+            st.session_state[ver_key] += 1
 
             if is_leader:
                 clear_cache()
                 st.success(f"{len(rows)}건 등록 완료 (확정)")
                 st.rerun()
 
-            date_range = f"{min(entries)}~{max(entries)}"
+            date_range = f"{open_days[0].isoformat()}~{open_days[-1].isoformat()}"
             summary_txt = " / ".join(summary)
             get_ws("requests", REQUEST_HEADERS).append_row([
                 uuid.uuid4().hex[:8], "주간신규", user, date_range,
