@@ -29,9 +29,7 @@ WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 WORK_TYPES = ["근무", "연차", "오전반차", "오후반차", "기타"]
 IN_TIME_OPTIONS = [time(8, 0), time(8, 30), time(9, 0), time(9, 30), time(10, 0)]
 OUT_TIME_OPTIONS = [
-    time(16, 0), time(16, 30), time(17, 0), time(17, 30),
-    time(18, 30), time(19, 30), time(20, 0), time(20, 30),
-    time(21, 0), time(21, 30), time(22, 0),
+    time(h, m) for h in range(16, 23) for m in (0, 30) if not (h == 22 and m == 30)
 ]
 # 드롭다운용: 맨 앞에 공란(None) 추가 — 오전/오후 반차처럼 출근 또는 퇴근 한쪽만 필요한 경우 선택
 IN_TIME_CHOICES = [None] + IN_TIME_OPTIONS
