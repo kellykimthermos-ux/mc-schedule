@@ -27,6 +27,23 @@ from google.oauth2.service_account import Credentials
 KST = ZoneInfo("Asia/Seoul")
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 WORK_TYPES = ["근무", "연차", "오전반차", "오후반차", "기타"]
+IN_TIME_OPTIONS = [time(8, 0), time(8, 30), time(9, 30), time(10, 0)]
+OUT_TIME_OPTIONS = [
+    time(16, 0), time(16, 30), time(17, 0), time(17, 30),
+    time(18, 30), time(19, 30), time(20, 0), time(20, 30),
+    time(21, 0), time(21, 30), time(22, 0),
+]
+def nearest_option(t: time, options: list) -> time:
+    """저장된 값이 옵션 목록에 없을 경우(과거 09:00/18:00 데이터 등) 가장 가까운 옵션으로 보정"""
+    if t in options:
+        return t
+    return min(options, key=lambda o: abs(
+        (o.hour * 60 + o.minute) - (t.hour * 60 + t.minute)
+    ))
+
+
+DEFAULT_IN = nearest_option(time(9, 0), IN_TIME_OPTIONS)
+DEFAULT_OUT = nearest_option(time(18, 0), OUT_TIME_OPTIONS)
 
 SCHEDULE_HEADERS = ["이름", "날짜", "유형", "출근", "퇴근", "비고", "상태"]
 REQUEST_HEADERS = [
@@ -320,8 +337,8 @@ def tab_register(container):
                     continue
                 p = prev.iloc[0]
                 st.session_state[f"wt_{ds}"] = p["유형"] if p["유형"] in WORK_TYPES else "근무"
-                st.session_state[f"in_{ds}"] = parse_hhmm(p["출근"], time(9, 0))
-                st.session_state[f"out_{ds}"] = parse_hhmm(p["퇴근"], time(18, 0))
+                st.session_state[f"in_{ds}"] = nearest_option(parse_hhmm(p["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
+                st.session_state[f"out_{ds}"] = nearest_option(parse_hhmm(p["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
                 st.session_state[f"memo_{ds}"] = p["비고"]
                 copied += 1
             if copied:
@@ -330,6 +347,7 @@ def tab_register(container):
                 st.warning("복사할 지난주 스케줄이 없거나, 이 주는 이미 모두 등록되어 있습니다.")
 
         entries = {}
+        header_shown = False
         for d in days:
             ds = d.isoformat()
             day_label = f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})"
@@ -342,11 +360,24 @@ def tab_register(container):
                 else:
                     c2.info(f"{schedule_label(r)} 확정 → 수정은 변경 요청")
                 continue
+            if not header_shown:
+                h1, h2, h3, h4 = st.columns([1.2, 1.5, 1.5, 2])
+                h1.caption("날짜 / 유형")
+                h2.caption("출근")
+                h3.caption("퇴근")
+                h4.caption("비고")
+                header_shown = True
             with c1:
                 st.markdown(f"**{day_label}**")
                 wt = st.selectbox("유형", WORK_TYPES, key=f"wt_{ds}", label_visibility="collapsed")
-            t_in = c2.time_input("출근", value=time(9, 0), key=f"in_{ds}", step=1800)
-            t_out = c3.time_input("퇴근", value=time(18, 0), key=f"out_{ds}", step=1800)
+            t_in = c2.selectbox(
+                "출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(DEFAULT_IN),
+                key=f"in_{ds}", format_func=fmt_time, label_visibility="collapsed",
+            )
+            t_out = c3.selectbox(
+                "퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(DEFAULT_OUT),
+                key=f"out_{ds}", format_func=fmt_time, label_visibility="collapsed",
+            )
             memo = c4.text_input("비고", key=f"memo_{ds}", label_visibility="collapsed", placeholder="비고")
             entries[ds] = (wt, t_in, t_out, memo)
 
@@ -423,8 +454,10 @@ def tab_change_request(container):
         c1, c2, c3 = st.columns(3)
         cur_type_idx = WORK_TYPES.index(cur["유형"]) if cur["유형"] in WORK_TYPES else 0
         new_type = c1.selectbox("변경 유형", WORK_TYPES, index=cur_type_idx)
-        new_in = c2.time_input("새 출근", value=parse_hhmm(cur["출근"], time(9, 0)), step=1800)
-        new_out = c3.time_input("새 퇴근", value=parse_hhmm(cur["퇴근"], time(18, 0)), step=1800)
+        cur_in = nearest_option(parse_hhmm(cur["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
+        cur_out = nearest_option(parse_hhmm(cur["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
+        new_in = c2.selectbox("새 출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(cur_in), format_func=fmt_time)
+        new_out = c3.selectbox("새 퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(cur_out), format_func=fmt_time)
         reason = st.text_input("변경 사유 (필수)", placeholder="예: 오후 병원 방문으로 조기 출근")
 
         if st.button("변경 요청 제출", type="primary"):
@@ -562,15 +595,57 @@ def tab_history(container):
                      use_container_width=True, hide_index=True)
 
 
+def tab_leader_edit(container):
+    """팀장 본인의 확정 스케줄 수정 — 승인 절차 없이 즉시 반영"""
+    with container:
+        st.subheader("일정 수정")
+        st.caption("본인 확정 스케줄을 즉시 수정합니다. 승인 절차가 없으니 반영 전 다시 한 번 확인해주세요.")
+        sch = load_df("schedule")
+        mine = sch[(sch["이름"] == user) & (sch["상태"] == "확정")].sort_values("날짜")
+        if mine.empty:
+            st.info("수정할 확정 스케줄이 없습니다. 먼저 주간 스케줄을 등록해주세요.")
+            return
+
+        target_date = st.selectbox(
+            "수정할 날짜",
+            mine["날짜"].tolist(),
+            format_func=lambda ds: f"{ds} ({WEEKDAY_KR[date.fromisoformat(ds).weekday()]}) — 현재: "
+                                   f"{schedule_label(mine[mine['날짜'] == ds].iloc[0])}",
+        )
+        cur = mine[mine["날짜"] == target_date].iloc[0]
+
+        c1, c2, c3 = st.columns(3)
+        cur_type_idx = WORK_TYPES.index(cur["유형"]) if cur["유형"] in WORK_TYPES else 0
+        new_type = c1.selectbox("변경 유형", WORK_TYPES, index=cur_type_idx)
+        cur_in = nearest_option(parse_hhmm(cur["출근"], DEFAULT_IN), IN_TIME_OPTIONS)
+        cur_out = nearest_option(parse_hhmm(cur["퇴근"], DEFAULT_OUT), OUT_TIME_OPTIONS)
+        new_in = c2.selectbox("새 출근", IN_TIME_OPTIONS, index=IN_TIME_OPTIONS.index(cur_in), format_func=fmt_time)
+        new_out = c3.selectbox("새 퇴근", OUT_TIME_OPTIONS, index=OUT_TIME_OPTIONS.index(cur_out), format_func=fmt_time)
+        memo = st.text_input("비고", value=cur["비고"])
+
+        if st.button("즉시 반영", type="primary"):
+            idx = find_schedule_row(sch, user, target_date)
+            n_in = "" if new_type == "연차" else fmt_time(new_in)
+            n_out = "" if new_type == "연차" else fmt_time(new_out)
+            update_schedule_cells(idx, {
+                "유형": new_type, "출근": n_in, "퇴근": n_out, "비고": memo, "상태": "확정",
+            })
+            clear_cache()
+            st.success(f"{target_date} 일정이 {label_of(new_type, n_in, n_out)}(으)로 수정되었습니다.")
+            st.rerun()
+
+
 # ─────────────────────────────────────────────
 # 탭 구성 및 렌더링
 # ─────────────────────────────────────────────
 if is_leader:
-    tabs = st.tabs([f"✅ 승인 대기 ({len(pending)})", "📅 전체 스케줄", "📝 내 스케줄 등록", "📚 요청 이력"])
+    tabs = st.tabs([f"✅ 승인 대기 ({len(pending)})", "📅 전체 스케줄", "📝 내 스케줄 등록",
+                    "🔁 일정 수정", "📚 요청 이력"])
     tab_approvals(tabs[0])
     tab_schedule(tabs[1])
     tab_register(tabs[2])
-    tab_history(tabs[3])
+    tab_leader_edit(tabs[3])
+    tab_history(tabs[4])
 else:
     tabs = st.tabs(["📅 전체 스케줄", "📝 주간 스케줄 등록", "🔁 변경 요청", "📋 내 요청 현황"])
     tab_schedule(tabs[0])
