@@ -494,9 +494,11 @@ def tab_change_request(container):
         st.subheader("스케줄 변경 요청")
         st.caption("확정된 스케줄만 변경 요청할 수 있습니다. 승인 전까지 기존 스케줄이 유효해요.")
         sch = load_df("schedule")
+        today_str = datetime.now(KST).date().isoformat()
         my_pending_chg_dates = set(pending_chg[pending_chg["이름"] == user]["날짜"])
         mine = sch[(sch["이름"] == user) &
-                   ((sch["상태"] == "확정") | (sch["날짜"].isin(my_pending_chg_dates)))].sort_values("날짜")
+                   ((sch["상태"] == "확정") | (sch["날짜"].isin(my_pending_chg_dates))) &
+                   (sch["날짜"] >= today_str)].sort_values("날짜")
         if mine.empty:
             st.info("변경 가능한 확정 스케줄이 없습니다. 주간 스케줄을 먼저 등록하고 승인을 받아주세요.")
             return
@@ -698,7 +700,9 @@ def tab_leader_edit(container):
         st.subheader("일정 수정")
         st.caption("본인 확정 스케줄을 즉시 수정합니다. 승인 절차가 없으니 반영 전 다시 한 번 확인해주세요.")
         sch = load_df("schedule")
-        mine = sch[(sch["이름"] == user) & (sch["상태"] == "확정")].sort_values("날짜")
+        today_str = datetime.now(KST).date().isoformat()
+        mine = sch[(sch["이름"] == user) & (sch["상태"] == "확정") &
+                   (sch["날짜"] >= today_str)].sort_values("날짜")
         if mine.empty:
             st.info("수정할 확정 스케줄이 없습니다. 먼저 주간 스케줄을 등록해주세요.")
             return
