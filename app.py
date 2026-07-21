@@ -15,6 +15,7 @@
 
 import smtplib
 import uuid
+import html
 from datetime import datetime, date, time, timedelta
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ from google.oauth2.service_account import Credentials
 
 KST = ZoneInfo("Asia/Seoul")
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
-WORK_TYPES = ["근무", "연차", "오전반차", "오후반차", "기타"]
+WORK_TYPES = ["근무", "외근", "연차", "오전반차", "오후반차", "기타"]
 IN_TIME_OPTIONS = [time(8, 0), time(8, 30), time(9, 0), time(9, 30), time(10, 0)]
 OUT_TIME_OPTIONS = [
     time(h, m) for h in range(16, 23) for m in (0, 30) if not (h == 22 and m == 30)
@@ -300,29 +301,48 @@ def render_week_table(monday: date):
     sch = load_df("schedule")
     days = week_dates(monday)
     names = list(users_cfg.keys())
-    data = {}
+
+    def cell_html(r_row, ds, n):
+        if r_row is None:
+            return '<span style="color:var(--text-muted)">—</span>'
+        r = r_row
+        label = schedule_label(r)
+        if r["상태"] == "승인대기":
+            pr = pending_chg[(pending_chg["이름"] == n) & (pending_chg["날짜"] == ds)]
+            if not pr.empty:
+                p = pr.iloc[0]
+                label = f"{label} → {label_of(p['신규유형'], p['신규출근'], p['신규퇴근'])} ⏳승인대기"
+            else:
+                label += " ⏳승인대기"
+        html_out = html.escape(label)
+        memo = str(r.get("비고", "")).strip()
+        if memo and memo.lower() != "nan":
+            html_out += f'<br><span style="color:var(--text-muted);font-size:11px">{html.escape(memo)}</span>'
+        return html_out
+
+    rows_html = ""
+    header_html = "<th style='padding:6px 4px;text-align:left;font-weight:500;color:var(--text-secondary);border-bottom:0.5px solid var(--border)'></th>"
     for d in days:
-        ds = d.isoformat()
-        col = f"{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})"
-        vals = []
-        for n in names:
-            row = sch[(sch["이름"] == n) & (sch["날짜"] == ds)]
-            if row.empty:
-                vals.append("—")
-                continue
-            r = row.iloc[0]
-            label = schedule_label(r)
-            if r["상태"] == "승인대기":
-                pr = pending_chg[(pending_chg["이름"] == n) & (pending_chg["날짜"] == ds)]
-                if not pr.empty:
-                    p = pr.iloc[0]
-                    label = f"{label} → {label_of(p['신규유형'], p['신규출근'], p['신규퇴근'])} ⏳승인대기"
-                else:
-                    label += " ⏳승인대기"
-            vals.append(label)
-        data[col] = vals
-    st.dataframe(pd.DataFrame(data, index=names), use_container_width=True)
-    st.caption("⏳승인대기: 팀장 승인 전 미확정 상태 (변경 건은 승인 전까지 기존 스케줄이 유효)")
+        header_html += (
+            f"<th style='padding:6px 4px;text-align:left;font-weight:500;color:var(--text-secondary);"
+            f"border-bottom:0.5px solid var(--border)'>{d.month}/{d.day}({WEEKDAY_KR[d.weekday()]})</th>"
+        )
+
+    for n in names:
+        row_html = f"<td style='padding:8px 4px;color:var(--text-secondary);white-space:nowrap'>{html.escape(n)}</td>"
+        for d in days:
+            ds = d.isoformat()
+            match = sch[(sch["이름"] == n) & (sch["날짜"] == ds)]
+            r_row = match.iloc[0] if not match.empty else None
+            row_html += f"<td style='padding:8px 4px;font-size:13px'>{cell_html(r_row, ds, n)}</td>"
+        rows_html += f"<tr>{row_html}</tr>"
+
+    st.markdown(
+        f"<table style='width:100%;border-collapse:collapse'>"
+        f"<tr>{header_html}</tr>{rows_html}</table>",
+        unsafe_allow_html=True,
+    )
+    st.caption("⏳승인대기: 팀장 승인 전 미확정 상태 (변경 건은 승인 전까지 기존 스케줄이 유효) · 작은 글씨는 비고(사유)입니다")
 
 
 def tab_schedule(container):
